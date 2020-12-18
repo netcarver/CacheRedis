@@ -31,7 +31,8 @@ class CacheRedis extends WireData implements Module {
 
 	protected $redis = false;
 	protected $connected = false;
-	
+	protected static $lua_scripts = array();
+
 	const expireDaily = 86400;
 	
 	const expireSave = "save";
@@ -67,12 +68,34 @@ class CacheRedis extends WireData implements Module {
 		} catch(Exception $e) {
 			$this->log("Error connecting to Redis: {$e->message}");
 		}
-		
+
 		$this->wire('redis', $this);
 
 		$this->addHookAfter("Pages::saved", $this, "maintenanceSave");
+
+		// Set up a Lua script to handle the deleteFor() operation without the need for network traffic & PHP iteration.
+		$redisServer = $this->redis->info("server");
+		$redisVersion = $redisServer["redis_version"];
+		$operation = 'DEL';
+		if(version_compare($redisVersion, "4.0.0", ">=")) $operation = 'UNLINK';
+		$script_key = "delete_for";
+		$script =<<<LUA
+local namespace = KEYS[1]..'__*'
+local cursor, num_deleted = 0, 0
+repeat
+  local matched_keys = redis.call('SCAN', cursor, 'MATCH', namespace, 'COUNT', 200)
+  cursor = matched_keys[1]
+  num_deleted = num_deleted + #matched_keys[2]
+  redis.call('$operation', unpack(matched_keys[2]))
+until cursor == '0'
+return num_deleted
+LUA;
+		self::$lua_scripts[$script_key] = $this->redis->script('load', $script);
+		if (false == self::$lua_scripts[$script_key]) {
+			throw new \Exception($this->_("Could not load LUA script"));
+		}
 	}
-		
+
 
 	/**
 	 * Retrieve a cache value or render it and store it with
@@ -676,7 +699,8 @@ class CacheRedis extends WireData implements Module {
 	 */
 	public function deleteFor($ns, $name = '', $force = false) {
 		if(is_object($ns)) $ns = wireClassName($ns, false);
-		if(!strlen($name)) return $this->deleteAllFor($ns);
+		/* if(!strlen($name)) return $this->deleteAllFor($ns, $force); */
+		if(!strlen($name)) return $this->deleteAllForViaLua($ns, $force);
 		return $this->delete($ns . "__$name");
 	}
 
@@ -698,4 +722,12 @@ class CacheRedis extends WireData implements Module {
 		return $force;
 	}
 
+
+	protected function deleteAllForViaLua($ns, $force = false) {
+		$redisServer = $this->redis->info("server");
+		$redisVersion = $redisServer["redis_version"];
+		$args = array($ns);
+		$num_deleted = $this->redis->evalSha(self::$lua_scripts['delete_for'], $args, 1);
+		return $force;
+	}
 }
