@@ -727,7 +727,6 @@ LUA;
 
 	protected function deleteAllForViaLua($ns, $force = false) {
 		$args = array($ns);
-		$num_deleted = $this->redis->evalSha(self::$lua_scripts['delete_for'], $args, 1);
-		return $force;
+		return $this->redis->evalSha(self::$lua_scripts['delete_for'], $args, 1);
 	}
 }
