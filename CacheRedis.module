@@ -709,6 +709,7 @@ LUA;
 		$redisServer = $this->redis->info("server");
 		$redisVersion = $redisServer["redis_version"];
 		$it = NULL;
+		$num_deleted = 0;
 		while($keys = $this->redis->scan($it, $ns . "__*", 500)) {
 			foreach($keys as $key) {
 				# Starting with redis 4.0.0, there is non-blocking UNLINK,
@@ -717,9 +718,10 @@ LUA;
 					$this->redis->unlink($key);
 				else
 					$this->redis->del($key);
+				$num_deleted++;
 			}
 		}
-		return $force;
+		return $num_deleted;
 	}
 
 
